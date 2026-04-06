@@ -93,9 +93,10 @@ class AnalogClock(QWidget):
             p.setFont(QFont("Segoe UI", 8, QFont.Normal))
             p.setPen(color)
             day_str = QLocale(QLocale.English).toString(date, "dddd")
-            p.drawText(-50, 20, 100, 15, Qt.AlignCenter, day_str)
+            # Elevated position to avoid 5 and 7 numbers
+            p.drawText(-50, 10, 100, 15, Qt.AlignCenter, day_str)
             p.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
-            p.drawText(-50, 35, 100, 20, Qt.AlignCenter, date_str)
+            p.drawText(-50, 25, 100, 20, Qt.AlignCenter, date_str)
             p.restore()
 
             # graphics (numbers)
@@ -124,7 +125,8 @@ class AnalogClock(QWidget):
             pen.setWidth(1)
             p.setPen(pen)
             p.save()
-            p.rotate(6.0 * (sec + msec / 1000.0))
+            # Back to discrete "tick-tock" movement for seconds
+            p.rotate(6.0 * sec)
             p.drawLine(0, 0, 0, -75)
             p.restore()
             
