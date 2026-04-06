@@ -1,6 +1,6 @@
 import sys
 import os
-from PySide6.QtCore import Qt, QTimer, QTime
+from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont
 
@@ -11,10 +11,10 @@ class AnalogClock(QWidget):
         self.color = QColor("white")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        # Get screen geometry to place the clock at top right
+        # Get screen geometry to place the clock exactly at the top right
         screen = QApplication.primaryScreen().availableGeometry()
         width, height = 160, 160
-        margin = 10
+        margin = 0
         x = screen.width() - width - margin
         y = margin
         self.setGeometry(x, y, width, height)
@@ -36,6 +36,9 @@ class AnalogClock(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         side = min(self.width(), self.height())
         time = QTime.currentTime()
+        date = QDate.currentDate()
+        # Ensure English month names
+        date_str = QLocale(QLocale.English).toString(date, "d MMMM yyyy")
 
         painter.translate(self.width() / 2, self.height() / 2)
         painter.scale(side / 200.0, side / 200.0)
@@ -46,9 +49,18 @@ class AnalogClock(QWidget):
         painter.setPen(pen)
         painter.drawEllipse(-90, -90, 180, 180)
 
-        # font
+        # numbers font
         font = QFont("Segoe UI", 16, QFont.Bold)
         painter.setFont(font)
+
+        # Draw date in the center-ish area
+        painter.save()
+        font_date = QFont("Segoe UI", 10, QFont.DemiBold)
+        painter.setFont(font_date)
+        painter.setPen(self.color)
+        # Position it below the center pivot
+        painter.drawText(-50, 25, 100, 20, Qt.AlignCenter, date_str)
+        painter.restore()
 
         # graphics
         for i in range(1, 13):
