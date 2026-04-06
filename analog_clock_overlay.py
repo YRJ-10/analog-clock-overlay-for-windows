@@ -1,7 +1,8 @@
 import sys
 import os
 import ctypes
-from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale
+import winreg
+from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont
 
@@ -22,13 +23,18 @@ class AnalogClock(QWidget):
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_timeout)
-        self.timer.start(1000)
+        self.timer.start(16) # 60 FPS for smooth movement
         self.set_click_through(True)
         self.force_topmost()
 
     def on_timer_timeout(self):
         self.update()
-        self.force_topmost()
+        # Only force topmost occasionally (e.g., every 60 frames ~ 1 sec)
+        if not hasattr(self, 'frame_count'): self.frame_count = 0
+        self.frame_count += 1
+        if self.frame_count % 60 == 0:
+            self.force_topmost()
+            self.frame_count = 0
 
     def force_topmost(self):
         """ Force the window to stay on top using Win32 API as a fallback. """
@@ -57,71 +63,78 @@ class AnalogClock(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         side = min(self.width(), self.height())
-        time = QTime.currentTime()
+        
+        # Smooth time calculation
+        time = QDateTime.currentDateTime().time()
+        msec = time.msec()
+        sec = time.second()
+        minute = time.minute()
+        hour = time.hour()
+        
         date = QDate.currentDate()
-        # Ensure English month names
         date_str = QLocale(QLocale.English).toString(date, "d MMMM yyyy")
 
         painter.translate(self.width() / 2, self.height() / 2)
         painter.scale(side / 200.0, side / 200.0)
 
-        # outer circle
-        pen = QPen(self.color)
-        pen.setWidth(4)
-        painter.setPen(pen)
-        painter.drawEllipse(-90, -90, 180, 180)
+        def draw_elements(p, color, is_shadow=False):
+            offset = 2 if is_shadow else 0
+            if is_shadow:
+                p.translate(offset, offset)
 
-        # numbers font
-        font = QFont("Segoe UI", 16, QFont.Bold)
-        painter.setFont(font)
+            # outer circle
+            pen = QPen(color)
+            pen.setWidth(4)
+            p.setPen(pen)
+            p.drawEllipse(-90, -90, 180, 180)
 
-        # Draw date and day in the center-ish area
-        painter.save()
-        
-        # Day font (smaller)
-        font_day = QFont("Segoe UI", 8, QFont.Normal)
-        painter.setFont(font_day)
-        painter.setPen(self.color)
-        day_str = QLocale(QLocale.English).toString(date, "dddd")
-        # Position day directly above the date
-        painter.drawText(-50, 20, 100, 15, Qt.AlignCenter, day_str)
-        
-        # Date font
-        font_date = QFont("Segoe UI", 10, QFont.DemiBold)
-        painter.setFont(font_date)
-        # Position date below the day
-        painter.drawText(-50, 35, 100, 20, Qt.AlignCenter, date_str)
-        
-        painter.restore()
+            # Draw day/date
+            p.save()
+            p.setFont(QFont("Segoe UI", 8, QFont.Normal))
+            p.setPen(color)
+            day_str = QLocale(QLocale.English).toString(date, "dddd")
+            p.drawText(-50, 20, 100, 15, Qt.AlignCenter, day_str)
+            p.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
+            p.drawText(-50, 35, 100, 20, Qt.AlignCenter, date_str)
+            p.restore()
 
-        # graphics
-        for i in range(1, 13):
-            painter.save()
-            painter.rotate(30.0 * i)
-            painter.translate(0, -68)
-            painter.rotate(-30.0 * i)
-            painter.drawText(-20, -20, 40, 40, Qt.AlignCenter, str(i))
-            painter.restore()
+            # graphics (numbers)
+            p.setFont(QFont("Segoe UI", 16, QFont.Bold))
+            for i in range(1, 13):
+                p.save()
+                p.rotate(30.0 * i)
+                p.translate(0, -68)
+                p.rotate(-30.0 * i)
+                p.drawText(-20, -20, 40, 40, Qt.AlignCenter, str(i))
+                p.restore()
 
-        # hour
-        painter.save()
-        painter.rotate(30.0 * ((time.hour() + time.minute() / 60.0)))
-        painter.drawLine(0, 0, 0, -40)
-        painter.restore()
+            # hour hand
+            p.save()
+            p.rotate(30.0 * ((hour % 12) + minute / 60.0 + sec / 3600.0))
+            p.drawLine(0, 0, 0, -40)
+            p.restore()
 
-        # minutes
-        painter.save()
-        painter.rotate(6.0 * (time.minute() + time.second() / 60.0))
-        painter.drawLine(0, 0, 0, -60)
-        painter.restore()
+            # minutes hand
+            p.save()
+            p.rotate(6.0 * (minute + sec / 60.0 + msec / 60000.0))
+            p.drawLine(0, 0, 0, -60)
+            p.restore()
 
-        # second
-        pen.setWidth(1)
-        painter.setPen(pen)
-        painter.save()
-        painter.rotate(6.0 * time.second())
-        painter.drawLine(0, 0, 0, -75)
-        painter.restore()
+            # second hand
+            pen.setWidth(1)
+            p.setPen(pen)
+            p.save()
+            p.rotate(6.0 * (sec + msec / 1000.0))
+            p.drawLine(0, 0, 0, -75)
+            p.restore()
+            
+            if is_shadow:
+                p.translate(-offset, -offset)
+
+        # Draw Shadow first
+        draw_elements(painter, QColor(0, 0, 0, 100), is_shadow=True)
+        # Draw Main Clock
+        draw_elements(painter, self.color)
 
     def mousePressEvent(self, event):
         if self.edit_mode and event.button() == Qt.LeftButton:
@@ -140,6 +153,40 @@ def get_resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 def create_tray_icon(clock_widget, app):
+    # Startup management
+    reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    app_name = "AnalogClockOverlay"
+    
+    def is_startup_enabled():
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_READ)
+            winreg.QueryValueEx(key, app_name)
+            winreg.CloseKey(key)
+            return True
+        except WindowsError:
+            return False
+
+    def toggle_startup(checked):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_WRITE)
+            if checked:
+                # Get the absolute path of the current script or executable
+                if getattr(sys, 'frozen', False):
+                    path = sys.executable
+                else:
+                    python_exe = sys.executable
+                    script_path = os.path.abspath(sys.argv[0])
+                    path = f'"{python_exe}" "{script_path}"'
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, path)
+            else:
+                try:
+                    winreg.DeleteValue(key, app_name)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception as e:
+            print(f"Failed to set startup: {e}")
+
     # logo
     icon_path = get_resource_path("icon.png")
     
@@ -180,6 +227,13 @@ def create_tray_icon(clock_widget, app):
     opacity_menu.addAction("100%").triggered.connect(lambda: clock_widget.setWindowOpacity(1.0))
     opacity_menu.addAction("70%").triggered.connect(lambda: clock_widget.setWindowOpacity(0.7))
     opacity_menu.addAction("40%").triggered.connect(lambda: clock_widget.setWindowOpacity(0.4))
+
+    menu.addSeparator()
+    
+    startup_action = menu.addAction("Run at Startup")
+    startup_action.setCheckable(True)
+    startup_action.setChecked(is_startup_enabled())
+    startup_action.triggered.connect(toggle_startup)
 
     menu.addSeparator()
     menu.addAction("Exit").triggered.connect(app.quit)
