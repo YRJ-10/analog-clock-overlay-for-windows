@@ -11,7 +11,13 @@ class AnalogClock(QWidget):
         self.color = QColor("white")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setGeometry(1760, 50, 160, 160)
+        # Get screen geometry to place the clock at top right
+        screen = QApplication.primaryScreen().availableGeometry()
+        width, height = 160, 160
+        margin = 10
+        x = screen.width() - width - margin
+        y = margin
+        self.setGeometry(x, y, width, height)
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update)
