@@ -2,24 +2,28 @@ import sys
 import os
 import ctypes
 import winreg
-from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime
+import winsound
+from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont
+from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor
 
 class AnalogClock(QWidget):
     def __init__(self):
         super().__init__()
         self.edit_mode = False
+        self.ghost_mode = True
         self.color = QColor("white")
+        self.base_opacity = 1.0
+        self.glow_factor = 0
+        self.last_hour = QTime.currentTime().hour()
+        
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        # Get screen geometry to place the clock exactly at the top right
-        screen = QApplication.primaryScreen().availableGeometry()
-        width, height = 160, 160
-        margin = 0
-        x = screen.width() - width - margin
-        y = margin
-        self.setGeometry(x, y, width, height)
+        
+        # Initial size and position
+        self.current_width = 160
+        self.current_height = 160
+        self.update_geometry()
         
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_timeout)
@@ -27,14 +31,54 @@ class AnalogClock(QWidget):
         self.set_click_through(True)
         self.force_topmost()
 
+    def update_geometry(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 0
+        x = screen.width() - self.current_width - margin
+        y = margin
+        self.setGeometry(x, y, self.current_width, self.current_height)
+
     def on_timer_timeout(self):
+        # 1. Update drawing
         self.update()
-        # Only force topmost occasionally (e.g., every 60 frames ~ 1 sec)
+        
+        # 2. Check for Hover (Auto-Fade)
+        mouse_pos = QCursor.pos()
+        if self.geometry().contains(mouse_pos):
+            target_opacity = 0.2
+        else:
+            target_opacity = self.base_opacity
+            
+        # Smoothly transition opacity
+        curr = self.windowOpacity()
+        if abs(curr - target_opacity) > 0.05:
+            self.setWindowOpacity(curr + (0.05 if target_opacity > curr else -0.05))
+        else:
+            self.setWindowOpacity(target_opacity)
+
+        # 3. Check for Hourly Chime
+        current_time = QTime.currentTime()
+        if current_time.hour() != self.last_hour and current_time.minute() == 0:
+            self.trigger_chime()
+            self.last_hour = current_time.hour()
+            
+        # Fade out glow
+        if self.glow_factor > 0:
+            self.glow_factor -= 2
+
+        # 4. Force topmost occasionally
         if not hasattr(self, 'frame_count'): self.frame_count = 0
         self.frame_count += 1
         if self.frame_count % 60 == 0:
             self.force_topmost()
             self.frame_count = 0
+
+    def trigger_chime(self):
+        self.glow_factor = 100
+        # Play subtle beep in a background thread or just briefly
+        try:
+            winsound.Beep(1000, 200) 
+        except: pass
 
     def force_topmost(self):
         """ Force the window to stay on top using Win32 API as a fallback. """
@@ -77,10 +121,18 @@ class AnalogClock(QWidget):
         painter.translate(self.width() / 2, self.height() / 2)
         painter.scale(side / 200.0, side / 200.0)
 
-        def draw_elements(p, color, is_shadow=False):
+        def draw_elements(p, color, is_shadow=False, is_glow=False):
             offset = 2 if is_shadow else 0
             if is_shadow:
                 p.translate(offset, offset)
+            
+            if is_glow:
+                # Draw a glow ring
+                glow_pen = QPen(color)
+                glow_pen.setWidth(10)
+                p.setPen(glow_pen)
+                p.drawEllipse(-92, -92, 184, 184)
+                return
 
             # outer circle
             pen = QPen(color)
@@ -130,12 +182,17 @@ class AnalogClock(QWidget):
             p.drawLine(0, 0, 0, -75)
             p.restore()
             
-            if is_shadow:
-                p.translate(-offset, -offset)
+            if is_shadow: p.translate(-offset, -offset)
 
-        # Draw Shadow first
+        # 1. Draw Glow (if active)
+        if self.glow_factor > 0:
+            glow_color = QColor(self.color)
+            glow_color.setAlpha(self.glow_factor)
+            draw_elements(painter, glow_color, is_glow=True)
+
+        # 2. Draw Shadow
         draw_elements(painter, QColor(0, 0, 0, 100), is_shadow=True)
-        # Draw Main Clock
+        # 3. Draw Main Clock
         draw_elements(painter, self.color)
 
     def mousePressEvent(self, event):
@@ -209,26 +266,58 @@ def create_tray_icon(clock_widget, app):
     
     def toggle_edit():
         clock_widget.edit_mode = not clock_widget.edit_mode
-        clock_widget.set_click_through(not clock_widget.edit_mode)
+        # If edit mode is ON, we MUST disable ghost mode to allow dragging
+        effective_ghost = not clock_widget.edit_mode and clock_widget.ghost_mode
+        clock_widget.set_click_through(effective_ghost)
         edit_action.setChecked(clock_widget.edit_mode)
 
     edit_action = menu.addAction("Edit Mode (Drag)")
     edit_action.setCheckable(True)
     edit_action.triggered.connect(toggle_edit)
 
-    color_menu = menu.addMenu("Color")
+    def toggle_ghost(checked):
+        clock_widget.ghost_mode = checked
+        if not clock_widget.edit_mode:
+            clock_widget.set_click_through(checked)
+
+    ghost_action = menu.addAction("Ghost Mode (Click-through)")
+    ghost_action.setCheckable(True)
+    ghost_action.setChecked(clock_widget.ghost_mode)
+    ghost_action.triggered.connect(toggle_ghost)
+
+    menu.addSeparator()
+
+    color_menu = menu.addMenu("Theme Colors")
     def change_color(c):
         clock_widget.color = QColor(c)
         clock_widget.update()
 
-    color_menu.addAction("White").triggered.connect(lambda: change_color("white"))
-    color_menu.addAction("Cyan").triggered.connect(lambda: change_color("cyan"))
-    color_menu.addAction("Gold").triggered.connect(lambda: change_color("gold"))
+    color_menu.addAction("Classic White").triggered.connect(lambda: change_color("white"))
+    color_menu.addAction("Cyan Glow").triggered.connect(lambda: change_color("#00ffff"))
+    color_menu.addAction("Luxury Gold").triggered.connect(lambda: change_color("#ffd700"))
+    color_menu.addAction("Neon Pink").triggered.connect(lambda: change_color("#ff00ff"))
+    color_menu.addAction("Emerald Green").triggered.connect(lambda: change_color("#50c878"))
+    color_menu.addAction("Midnight Blue").triggered.connect(lambda: change_color("#191970"))
 
-    opacity_menu = menu.addMenu("Opacity")
-    opacity_menu.addAction("100%").triggered.connect(lambda: clock_widget.setWindowOpacity(1.0))
-    opacity_menu.addAction("70%").triggered.connect(lambda: clock_widget.setWindowOpacity(0.7))
-    opacity_menu.addAction("40%").triggered.connect(lambda: clock_widget.setWindowOpacity(0.4))
+    scale_menu = menu.addMenu("Scale / Size")
+    def change_scale(w, h):
+        clock_widget.current_width = w
+        clock_widget.current_height = h
+        clock_widget.update_geometry()
+
+    scale_menu.addAction("Tiny (100px)").triggered.connect(lambda: change_scale(100, 100))
+    scale_menu.addAction("Small (160px)").triggered.connect(lambda: change_scale(160, 160))
+    scale_menu.addAction("Medium (240px)").triggered.connect(lambda: change_scale(240, 240))
+    scale_menu.addAction("Large (320px)").triggered.connect(lambda: change_scale(320, 320))
+
+    opacity_menu = menu.addMenu("Base Opacity")
+    def set_base_opacity(o):
+        clock_widget.base_opacity = o
+        clock_widget.setWindowOpacity(o)
+
+    opacity_menu.addAction("100%").triggered.connect(lambda: set_base_opacity(1.0))
+    opacity_menu.addAction("70%").triggered.connect(lambda: set_base_opacity(0.7))
+    opacity_menu.addAction("40%").triggered.connect(lambda: set_base_opacity(0.4))
 
     menu.addSeparator()
     
