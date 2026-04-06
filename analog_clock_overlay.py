@@ -1,5 +1,6 @@
 import sys
 import os
+import ctypes
 from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont
@@ -20,9 +21,30 @@ class AnalogClock(QWidget):
         self.setGeometry(x, y, width, height)
         
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update)
+        self.timer.timeout.connect(self.on_timer_timeout)
         self.timer.start(1000)
         self.set_click_through(True)
+        self.force_topmost()
+
+    def on_timer_timeout(self):
+        self.update()
+        self.force_topmost()
+
+    def force_topmost(self):
+        """ Force the window to stay on top using Win32 API as a fallback. """
+        if os.name == 'nt':
+            # Win32 Constants
+            HWND_TOPMOST = -1
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
+            
+            # Use ctypes to call SetWindowPos periodically to ensure it's not hidden
+            ctypes.windll.user32.SetWindowPos(self.winId(), HWND_TOPMOST, 0, 0, 0, 0, 
+                                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        else:
+            self.raise_()
 
     def set_click_through(self, enabled):
         if enabled:
