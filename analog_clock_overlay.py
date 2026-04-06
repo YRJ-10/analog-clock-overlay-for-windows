@@ -53,13 +53,23 @@ class AnalogClock(QWidget):
         font = QFont("Segoe UI", 16, QFont.Bold)
         painter.setFont(font)
 
-        # Draw date in the center-ish area
+        # Draw date and day in the center-ish area
         painter.save()
+        
+        # Day font (smaller)
+        font_day = QFont("Segoe UI", 8, QFont.Normal)
+        painter.setFont(font_day)
+        painter.setPen(self.color)
+        day_str = QLocale(QLocale.English).toString(date, "dddd")
+        # Position day directly above the date
+        painter.drawText(-50, 20, 100, 15, Qt.AlignCenter, day_str)
+        
+        # Date font
         font_date = QFont("Segoe UI", 10, QFont.DemiBold)
         painter.setFont(font_date)
-        painter.setPen(self.color)
-        # Position it below the center pivot
-        painter.drawText(-50, 25, 100, 20, Qt.AlignCenter, date_str)
+        # Position date below the day
+        painter.drawText(-50, 35, 100, 20, Qt.AlignCenter, date_str)
+        
         painter.restore()
 
         # graphics
