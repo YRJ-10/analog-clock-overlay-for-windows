@@ -6,6 +6,8 @@ import winsound
 from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtCore import QUrl
 
 class AnalogClock(QWidget):
     def __init__(self):
@@ -30,6 +32,14 @@ class AnalogClock(QWidget):
         self.timer.start(16) # 60 FPS for smooth movement
         self.set_click_through(True)
         self.force_topmost()
+        
+        # Initialize Media Player for Voice Chimes
+        self.player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.player.setAudioOutput(self.audio_output)
+        self.audio_output.setVolume(1.0)
+        
+
 
     def update_geometry(self):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -75,10 +85,19 @@ class AnalogClock(QWidget):
 
     def trigger_chime(self):
         self.glow_factor = 100
-        # Play subtle beep in a background thread or just briefly
+        current_hour = QTime.currentTime().hour()
+        
+        # Coba putar file audio MP3
         try:
-            winsound.Beep(1000, 200) 
-        except: pass
+            audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio", f"jam_{current_hour}.mp3")
+            if os.path.exists(audio_path):
+                self.player.setSource(QUrl.fromLocalFile(audio_path))
+                self.player.play()
+            else:
+                winsound.Beep(1000, 200)
+        except Exception as e:
+            try: winsound.Beep(1000, 200)
+            except: pass
 
     def force_topmost(self):
         """ Force the window to stay on top using Win32 API as a fallback. """
