@@ -115,6 +115,19 @@ class AnalogClock(QWidget):
         else:
             self.raise_()
 
+    def refresh_overlay(self):
+        effective_ghost = not self.edit_mode and self.ghost_mode
+        self.setWindowFlag(Qt.WindowTransparentForInput, effective_ghost)
+
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+
+        self.force_topmost()
+        self.raise_()
+        self.update()
+
     def set_click_through(self, enabled):
         if enabled:
             self.setWindowFlag(Qt.WindowTransparentForInput, True)
@@ -282,7 +295,10 @@ def create_tray_icon(clock_widget, app):
     
     tray = QSystemTrayIcon(tray_icon, app)
     menu = QMenu()
-    
+
+    menu.addAction("Refresh Clock").triggered.connect(clock_widget.refresh_overlay)
+    menu.addSeparator()
+
     def toggle_edit():
         clock_widget.edit_mode = not clock_widget.edit_mode
         # If edit mode is ON, we MUST disable ghost mode to allow dragging
