@@ -363,8 +363,13 @@ def create_tray_icon(clock_widget, app):
 
     menu.addSeparator()
     menu.addAction("Exit").triggered.connect(app.quit)
-    
+
+    def show_menu_on_left_click(reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            menu.popup(QCursor.pos())
+
     tray.setContextMenu(menu)
+    tray.activated.connect(show_menu_on_left_click)
     tray.show()
     return tray
 
