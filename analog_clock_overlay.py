@@ -4,7 +4,7 @@ import ctypes
 import winreg
 import winsound
 from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTimeEdit, QSpinBox, QPushButton
 from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtCore import QUrl
@@ -18,6 +18,11 @@ class AnalogClock(QWidget):
         self.base_opacity = 1.0
         self.glow_factor = 0
         self.last_hour = QTime.currentTime().hour()
+        
+        self.alarm_time = None
+        self.last_alarm_triggered = None
+        self.timer_end_time = None
+        self.timer_1m_warned = False
         
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -40,6 +45,92 @@ class AnalogClock(QWidget):
         self.audio_output.setVolume(1.0)
         
 
+
+    def play_beeps(self):
+        self.beep_count = 0
+        def do_beep():
+            try: winsound.Beep(1000, 200)
+            except: pass
+            self.beep_count += 1
+            if self.beep_count < 4:
+                QTimer.singleShot(400, do_beep)
+        do_beep()
+        
+    def play_voice_warning(self):
+        try:
+            audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio", "tersisa_1_menit.mp3")
+            if os.path.exists(audio_path):
+                self.player.setSource(QUrl.fromLocalFile(audio_path))
+                self.player.play()
+        except Exception:
+            pass
+
+    def open_alarm_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Alarm")
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Atur Waktu Alarm:"))
+        time_edit = QTimeEdit()
+        if self.alarm_time:
+            time_edit.setTime(self.alarm_time)
+        else:
+            time_edit.setTime(QTime.currentTime().addSecs(3600))
+        layout.addWidget(time_edit)
+        
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("OK")
+        btn_clear = QPushButton("Hapus")
+        btn_cancel = QPushButton("Batal")
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_clear)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        dialog.setLayout(layout)
+        
+        def on_ok():
+            self.alarm_time = time_edit.time()
+            dialog.accept()
+        def on_clear():
+            self.alarm_time = None
+            dialog.accept()
+            
+        btn_ok.clicked.connect(on_ok)
+        btn_clear.clicked.connect(on_clear)
+        btn_cancel.clicked.connect(dialog.reject)
+        dialog.exec()
+
+    def open_timer_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Timer")
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Atur Durasi Timer (menit):"))
+        spin_box = QSpinBox()
+        spin_box.setRange(1, 1440)
+        spin_box.setValue(5)
+        layout.addWidget(spin_box)
+        
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("OK")
+        btn_clear = QPushButton("Hapus")
+        btn_cancel = QPushButton("Batal")
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_clear)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        dialog.setLayout(layout)
+        
+        def on_ok():
+            self.timer_end_time = QDateTime.currentDateTime().addSecs(spin_box.value() * 60)
+            self.timer_1m_warned = False
+            dialog.accept()
+        def on_clear():
+            self.timer_end_time = None
+            dialog.accept()
+            
+        btn_ok.clicked.connect(on_ok)
+        btn_clear.clicked.connect(on_clear)
+        btn_cancel.clicked.connect(dialog.reject)
+        dialog.exec()
 
     def update_geometry(self):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -71,6 +162,24 @@ class AnalogClock(QWidget):
         if current_time.hour() != self.last_hour and current_time.minute() == 0:
             self.trigger_chime()
             self.last_hour = current_time.hour()
+            
+        # Check Timer
+        if self.timer_end_time:
+            now = QDateTime.currentDateTime()
+            rem = now.msecsTo(self.timer_end_time)
+            if rem <= 0:
+                self.timer_end_time = None
+                self.play_beeps()
+            elif rem <= 60000 and not self.timer_1m_warned:
+                self.timer_1m_warned = True
+                self.play_voice_warning()
+
+        # Check Alarm
+        if self.alarm_time:
+            if current_time.hour() == self.alarm_time.hour() and current_time.minute() == self.alarm_time.minute():
+                if self.last_alarm_triggered != self.alarm_time:
+                    self.last_alarm_triggered = self.alarm_time
+                    self.play_beeps()
             
         # Fade out glow
         if self.glow_factor > 0:
@@ -183,6 +292,32 @@ class AnalogClock(QWidget):
             p.drawText(-60, 27, 120, 15, Qt.AlignCenter, date_str)
             p.restore()
 
+            # Draw Alarm Icon and Text
+            p.save()
+            p.setFont(QFont("Segoe UI Emoji", 14))
+            p.setPen(color)
+            p.drawText(-45, 30, 30, 30, Qt.AlignCenter, "🔔")
+            if self.alarm_time:
+                p.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+                p.drawText(-55, 55, 50, 15, Qt.AlignCenter, self.alarm_time.toString("HH:mm"))
+            p.restore()
+
+            # Draw Timer Icon and Text
+            p.save()
+            p.setFont(QFont("Segoe UI Emoji", 14))
+            p.setPen(color)
+            p.drawText(15, 30, 30, 30, Qt.AlignCenter, "⏳")
+            if self.timer_end_time:
+                rem = QDateTime.currentDateTime().msecsTo(self.timer_end_time)
+                if rem > 0:
+                    secs = rem // 1000
+                    mins = secs // 60
+                    secs = secs % 60
+                    time_str = f"{mins:02}:{secs:02}"
+                    p.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+                    p.drawText(5, 55, 50, 15, Qt.AlignCenter, time_str)
+            p.restore()
+
             # graphics (numbers)
             p.setFont(QFont("Segoe UI", 16, QFont.Bold))
             for i in range(1, 13):
@@ -228,6 +363,38 @@ class AnalogClock(QWidget):
         draw_elements(painter, self.color)
 
     def mousePressEvent(self, event):
+        local_pos = event.position()
+        cx = self.width() / 2
+        cy = self.height() / 2
+        scale = min(self.width(), self.height()) / 200.0
+        nx = (local_pos.x() - cx) / scale
+        ny = (local_pos.y() - cy) / scale
+        
+        is_alarm_area = -55 <= nx <= -15 and 30 <= ny <= 70
+        is_timer_area = 5 <= nx <= 45 and 30 <= ny <= 70
+
+        if event.button() == Qt.RightButton:
+            if is_alarm_area:
+                self.alarm_time = None
+                self.update()
+                event.accept()
+                return
+            if is_timer_area:
+                self.timer_end_time = None
+                self.update()
+                event.accept()
+                return
+
+        if event.button() == Qt.LeftButton:
+            if is_alarm_area:
+                self.open_alarm_dialog()
+                event.accept()
+                return
+            if is_timer_area:
+                self.open_timer_dialog()
+                event.accept()
+                return
+
         if self.edit_mode and event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()

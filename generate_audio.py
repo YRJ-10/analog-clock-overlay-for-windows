@@ -27,4 +27,11 @@ for hour in range(0, 25):
     tts = gTTS(text=text, lang="id", slow=False)
     tts.save(filename)
 
+# Generate peringatan 1 menit timer
+timer_text = "Tersisa 1 menit"
+timer_filename = os.path.join(audio_dir, "tersisa_1_menit.mp3")
+print(f"Membuat {timer_filename} -> '{timer_text}'")
+tts_timer = gTTS(text=timer_text, lang="id", slow=False)
+tts_timer.save(timer_filename)
+
 print("\nBerhasil! Semua file audio telah dibuat di folder 'audio'.")
