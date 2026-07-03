@@ -306,19 +306,19 @@ class AnalogClock(QWidget):
             alarm_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{color.name()}" d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>'''
             from PySide6.QtCore import QByteArray, QRectF
             alarm_renderer = QSvgRenderer(QByteArray(alarm_svg.encode('utf-8')))
-            alarm_renderer.render(p, QRectF(-35, -45, 18, 18))
+            alarm_renderer.render(p, QRectF(-20, -45, 18, 18))
             
             if self.alarm_time:
                 p.setFont(QFont("Segoe UI", 7, QFont.DemiBold))
                 p.setPen(color)
-                p.drawText(-45, -25, 38, 15, Qt.AlignCenter, self.alarm_time.toString("HH:mm"))
+                p.drawText(-30, -25, 38, 15, Qt.AlignCenter, self.alarm_time.toString("HH:mm"))
             p.restore()
 
             # Draw Timer Icon and Text
             p.save()
             timer_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="{color.name()}" d="M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5l-4-4V4h8v3.5l-4 4z"/></svg>'''
             timer_renderer = QSvgRenderer(QByteArray(timer_svg.encode('utf-8')))
-            timer_renderer.render(p, QRectF(17, -45, 18, 18))
+            timer_renderer.render(p, QRectF(2, -45, 18, 18))
             
             if self.timer_end_time:
                 rem = QDateTime.currentDateTime().msecsTo(self.timer_end_time)
@@ -329,7 +329,7 @@ class AnalogClock(QWidget):
                     time_str = f"{mins:02}:{secs:02}"
                     p.setFont(QFont("Segoe UI", 7, QFont.DemiBold))
                     p.setPen(color)
-                    p.drawText(7, -25, 38, 15, Qt.AlignCenter, time_str)
+                    p.drawText(-8, -25, 38, 15, Qt.AlignCenter, time_str)
             p.restore()
 
             # graphics (numbers)
@@ -384,8 +384,8 @@ class AnalogClock(QWidget):
         nx = (local_pos.x() - cx) / scale
         ny = (local_pos.y() - cy) / scale
         
-        is_alarm_area = -45 <= nx <= -15 and -50 <= ny <= -10
-        is_timer_area = 5 <= nx <= 45 and -50 <= ny <= -10
+        is_alarm_area = -30 <= nx <= -2 and -50 <= ny <= -10
+        is_timer_area = 2 <= nx <= 30 and -50 <= ny <= -10
 
         if event.button() == Qt.RightButton:
             if is_alarm_area:
