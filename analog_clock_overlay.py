@@ -148,7 +148,7 @@ class AnalogClock(QWidget):
         hour = time.hour()
         
         date = QDate.currentDate()
-        date_str = QLocale(QLocale.English).toString(date, "d MMMM yyyy")
+        date_str = QLocale("id").toString(date, "d MMMM yyyy")
 
         painter.translate(self.width() / 2, self.height() / 2)
         painter.scale(side / 200.0, side / 200.0)
@@ -174,13 +174,13 @@ class AnalogClock(QWidget):
 
             # Draw day/date
             p.save()
-            p.setFont(QFont("Segoe UI", 8, QFont.Normal))
+            p.setFont(QFont("Segoe UI", 14, QFont.Bold))
             p.setPen(color)
-            day_str = QLocale(QLocale.English).toString(date, "dddd")
+            day_str = QLocale("id").toString(date, "dddd").capitalize()
             # Elevated position to avoid 5 and 7 numbers
-            p.drawText(-50, 10, 100, 15, Qt.AlignCenter, day_str)
-            p.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
-            p.drawText(-50, 25, 100, 20, Qt.AlignCenter, date_str)
+            p.drawText(-60, 4, 120, 24, Qt.AlignCenter, day_str)
+            p.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+            p.drawText(-60, 27, 120, 15, Qt.AlignCenter, date_str)
             p.restore()
 
             # graphics (numbers)
