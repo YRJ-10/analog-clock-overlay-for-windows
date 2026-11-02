@@ -1,7 +1,17 @@
 import sys
 import os
 import ctypes
+from ctypes import wintypes
 import winreg
+
+if os.name == 'nt':
+    class _MSG(ctypes.Structure):
+        _fields_ = [('hwnd', wintypes.HWND),
+                    ('message', wintypes.UINT),
+                    ('wParam', wintypes.WPARAM),
+                    ('lParam', wintypes.LPARAM),
+                    ('time', wintypes.DWORD),
+                    ('pt', wintypes.POINT)]
 import winsound
 from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTimeEdit, QSpinBox, QPushButton
@@ -226,6 +236,35 @@ class AnalogClock(QWidget):
             try: winsound.Beep(1000, 200)
             except: pass
 
+    def get_normalized_coords(self, local_x, local_y):
+        cx = self.width() / 2
+        cy = self.height() / 2
+        scale = min(self.width(), self.height()) / 200.0
+        nx = (local_x - cx) / scale
+        ny = (local_y - cy) / scale
+        return nx, ny
+
+    def is_alarm_area(self, nx, ny):
+        return -26 <= nx <= -2 and -58 <= ny <= -28
+
+    def is_timer_area(self, nx, ny):
+        return 2 <= nx <= 26 and -58 <= ny <= -28
+
+    def nativeEvent(self, eventType, message):
+        if os.name == 'nt':
+            msg = _MSG.from_address(int(message))
+            if msg.message == 0x0084:  # WM_NCHITTEST
+                if self.edit_mode or not self.ghost_mode:
+                    return True, 1  # HTCLIENT
+                x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                local_pt = self.mapFromGlobal(QPoint(x, y))
+                nx, ny = self.get_normalized_coords(local_pt.x(), local_pt.y())
+                if self.is_alarm_area(nx, ny) or self.is_timer_area(nx, ny):
+                    return True, 1  # HTCLIENT (active for timer & alarm)
+                return True, -1  # HTTRANSPARENT (ghost for everything else)
+        return super().nativeEvent(eventType, message)
+
     def force_topmost(self):
         """ Force the window to stay on top using Win32 API as a fallback. """
         if os.name == 'nt':
@@ -243,9 +282,6 @@ class AnalogClock(QWidget):
             self.raise_()
 
     def refresh_overlay(self):
-        effective_ghost = not self.edit_mode and self.ghost_mode
-        self.setWindowFlag(Qt.WindowTransparentForInput, effective_ghost)
-
         if self.isMinimized():
             self.showNormal()
         else:
@@ -256,11 +292,8 @@ class AnalogClock(QWidget):
         self.update()
 
     def set_click_through(self, enabled):
-        if enabled:
-            self.setWindowFlag(Qt.WindowTransparentForInput, True)
-        else:
-            self.setWindowFlag(Qt.WindowTransparentForInput, False)
-        self.show()
+        self.ghost_mode = enabled
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -387,40 +420,39 @@ class AnalogClock(QWidget):
 
     def mousePressEvent(self, event):
         local_pos = event.position()
-        cx = self.width() / 2
-        cy = self.height() / 2
-        scale = min(self.width(), self.height()) / 200.0
-        nx = (local_pos.x() - cx) / scale
-        ny = (local_pos.y() - cy) / scale
-        
-        is_alarm_area = -26 <= nx <= -2 and -58 <= ny <= -28
-        is_timer_area = 2 <= nx <= 26 and -58 <= ny <= -28
+        nx, ny = self.get_normalized_coords(local_pos.x(), local_pos.y())
 
+        # Right click cancels/clears active alarm or timer
         if event.button() == Qt.RightButton:
-            if is_alarm_area:
+            if self.is_alarm_area(nx, ny):
                 self.alarm_time = None
                 self.update()
                 event.accept()
                 return
-            if is_timer_area:
+            if self.is_timer_area(nx, ny):
                 self.timer_end_time = None
                 self.update()
                 event.accept()
                 return
 
-        if event.button() == Qt.LeftButton:
-            if is_alarm_area:
-                self.open_alarm_dialog()
-                event.accept()
-                return
-            if is_timer_area:
-                self.open_timer_dialog()
-                event.accept()
-                return
-
+        # Drag in edit mode
         if self.edit_mode and event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            local_pos = event.position()
+            nx, ny = self.get_normalized_coords(local_pos.x(), local_pos.y())
+            if self.is_alarm_area(nx, ny):
+                self.open_alarm_dialog()
+                event.accept()
+                return
+            if self.is_timer_area(nx, ny):
+                self.open_timer_dialog()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.edit_mode and event.buttons() & Qt.LeftButton:
