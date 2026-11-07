@@ -4,14 +4,7 @@ import ctypes
 from ctypes import wintypes
 import winreg
 
-if os.name == 'nt':
-    class _MSG(ctypes.Structure):
-        _fields_ = [('hwnd', wintypes.HWND),
-                    ('message', wintypes.UINT),
-                    ('wParam', wintypes.WPARAM),
-                    ('lParam', wintypes.LPARAM),
-                    ('time', wintypes.DWORD),
-                    ('pt', wintypes.POINT)]
+
 import winsound
 from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTimeEdit, QSpinBox, QPushButton
@@ -20,11 +13,63 @@ from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtCore import QUrl
 
+class IconOverlay(QWidget):
+    """
+    Jendela interaktif mini transparan yang menempel persis di atas ikon Timer & Alarm.
+    Memungkinkan kedua ikon menerima klik (double-click dan right-click) sementara
+    jendela jam utama tetap 100% tembus klik (WS_EX_TRANSPARENT).
+    """
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def paintEvent(self, event):
+        # Alpha 1 hampir tidak terlihat oleh mata, namun cukup bagi OS untuk mendeteksi klik
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 1))
+
+    def update_geometry(self):
+        cx = self.clock.width() / 2.0
+        cy = self.clock.height() / 2.0
+        scale = min(self.clock.width(), self.clock.height()) / 200.0
+
+        # Koordinat ikon:
+        # Alarm: x=[-22 .. -2], y=[-52 .. -32], text sampai y=-16
+        # Timer: x=[2 .. 22], y=[-52 .. -32], text sampai y=-16
+        w = max(1, int(52 * scale))
+        h = max(1, int(42 * scale))
+        left = int(self.clock.x() + cx - (w / 2.0))
+        top = int(self.clock.y() + cy - (56 * scale))
+
+        self.setGeometry(left, top, w, h)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if event.position().x() < self.width() / 2.0:
+                self.clock.open_alarm_dialog()
+            else:
+                self.clock.open_timer_dialog()
+            event.accept()
+
+    def mousePressEvent(self, event):
+        # Klik kanan untuk membatalkan / mereset
+        if event.button() == Qt.RightButton:
+            if event.position().x() < self.width() / 2.0:
+                self.clock.alarm_time = None
+                self.clock.update()
+            else:
+                self.clock.timer_end_time = None
+                self.clock.update()
+            event.accept()
+        # Klik kiri satu kali sengaja diabaikan (tidak membuka popup)
+
 class AnalogClock(QWidget):
     def __init__(self):
         super().__init__()
         self.edit_mode = False
-        self.ghost_mode = True
         self.color = QColor("white")
         self.base_opacity = 1.0
         self.glow_factor = 0
@@ -46,6 +91,7 @@ class AnalogClock(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_timeout)
         self.timer.start(16) # 60 FPS for smooth movement
+        self.icon_overlay = IconOverlay(self)
         self.set_click_through(True)
         self.force_topmost()
         
@@ -163,6 +209,8 @@ class AnalogClock(QWidget):
         x = screen.width() - self.current_width - margin
         y = margin
         self.setGeometry(x, y, self.current_width, self.current_height)
+        if hasattr(self, 'icon_overlay'):
+            self.icon_overlay.update_geometry()
 
     def on_timer_timeout(self):
         # 1. Update drawing
@@ -171,14 +219,15 @@ class AnalogClock(QWidget):
         # 2. Check for Hover (Auto-Fade)
         mouse_pos = QCursor.pos()
         if self.geometry().contains(mouse_pos):
-            target_opacity = 0.2
+            target_opacity = 0.05
         else:
             target_opacity = self.base_opacity
             
         # Smoothly transition opacity
         curr = self.windowOpacity()
-        if abs(curr - target_opacity) > 0.05:
-            self.setWindowOpacity(curr + (0.05 if target_opacity > curr else -0.05))
+        diff = target_opacity - curr
+        if abs(diff) > 0.02:
+            self.setWindowOpacity(curr + (0.05 if diff > 0 else -0.05))
         else:
             self.setWindowOpacity(target_opacity)
 
@@ -236,34 +285,7 @@ class AnalogClock(QWidget):
             try: winsound.Beep(1000, 200)
             except: pass
 
-    def get_normalized_coords(self, local_x, local_y):
-        cx = self.width() / 2
-        cy = self.height() / 2
-        scale = min(self.width(), self.height()) / 200.0
-        nx = (local_x - cx) / scale
-        ny = (local_y - cy) / scale
-        return nx, ny
 
-    def is_alarm_area(self, nx, ny):
-        return -26 <= nx <= -2 and -58 <= ny <= -28
-
-    def is_timer_area(self, nx, ny):
-        return 2 <= nx <= 26 and -58 <= ny <= -28
-
-    def nativeEvent(self, eventType, message):
-        if os.name == 'nt':
-            msg = _MSG.from_address(int(message))
-            if msg.message == 0x0084:  # WM_NCHITTEST
-                if self.edit_mode or not self.ghost_mode:
-                    return True, 1  # HTCLIENT
-                x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                local_pt = self.mapFromGlobal(QPoint(x, y))
-                nx, ny = self.get_normalized_coords(local_pt.x(), local_pt.y())
-                if self.is_alarm_area(nx, ny) or self.is_timer_area(nx, ny):
-                    return True, 1  # HTCLIENT (active for timer & alarm)
-                return True, -1  # HTTRANSPARENT (ghost for everything else)
-        return super().nativeEvent(eventType, message)
 
     def force_topmost(self):
         """ Force the window to stay on top using Win32 API as a fallback. """
@@ -278,22 +300,55 @@ class AnalogClock(QWidget):
             # Use ctypes to call SetWindowPos periodically to ensure it's not hidden
             ctypes.windll.user32.SetWindowPos(self.winId(), HWND_TOPMOST, 0, 0, 0, 0, 
                                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+            if hasattr(self, 'icon_overlay'):
+                ctypes.windll.user32.SetWindowPos(self.icon_overlay.winId(), HWND_TOPMOST, 0, 0, 0, 0,
+                                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
         else:
             self.raise_()
+            if hasattr(self, 'icon_overlay'):
+                self.icon_overlay.raise_()
 
     def refresh_overlay(self):
+        self.set_click_through(not self.edit_mode)
+
         if self.isMinimized():
             self.showNormal()
+            if hasattr(self, 'icon_overlay'):
+                self.icon_overlay.showNormal()
         else:
             self.show()
+            if hasattr(self, 'icon_overlay'):
+                self.icon_overlay.show()
 
         self.force_topmost()
         self.raise_()
         self.update()
+        if hasattr(self, 'icon_overlay'):
+            self.icon_overlay.update_geometry()
+            self.icon_overlay.raise_()
 
     def set_click_through(self, enabled):
-        self.ghost_mode = enabled
-        self.update()
+        if enabled:
+            self.setWindowFlag(Qt.WindowTransparentForInput, True)
+        else:
+            self.setWindowFlag(Qt.WindowTransparentForInput, False)
+        self.show()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'icon_overlay'):
+            self.icon_overlay.update_geometry()
+            self.icon_overlay.show()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, 'icon_overlay'):
+            self.icon_overlay.hide()
+
+    def closeEvent(self, event):
+        if hasattr(self, 'icon_overlay'):
+            self.icon_overlay.close()
+        super().closeEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -419,44 +474,16 @@ class AnalogClock(QWidget):
         draw_elements(painter, self.color)
 
     def mousePressEvent(self, event):
-        local_pos = event.position()
-        nx, ny = self.get_normalized_coords(local_pos.x(), local_pos.y())
-
-        # Right click cancels/clears active alarm or timer
-        if event.button() == Qt.RightButton:
-            if self.is_alarm_area(nx, ny):
-                self.alarm_time = None
-                self.update()
-                event.accept()
-                return
-            if self.is_timer_area(nx, ny):
-                self.timer_end_time = None
-                self.update()
-                event.accept()
-                return
-
         # Drag in edit mode
         if self.edit_mode and event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            local_pos = event.position()
-            nx, ny = self.get_normalized_coords(local_pos.x(), local_pos.y())
-            if self.is_alarm_area(nx, ny):
-                self.open_alarm_dialog()
-                event.accept()
-                return
-            if self.is_timer_area(nx, ny):
-                self.open_timer_dialog()
-                event.accept()
-                return
-        super().mouseDoubleClickEvent(event)
-
     def mouseMoveEvent(self, event):
         if self.edit_mode and event.buttons() & Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self.drag_pos)
+            if hasattr(self, 'icon_overlay'):
+                self.icon_overlay.update_geometry()
             event.accept()
 
 def get_resource_path(relative_path):
@@ -523,24 +550,13 @@ def create_tray_icon(clock_widget, app):
 
     def toggle_edit():
         clock_widget.edit_mode = not clock_widget.edit_mode
-        # If edit mode is ON, we MUST disable ghost mode to allow dragging
-        effective_ghost = not clock_widget.edit_mode and clock_widget.ghost_mode
-        clock_widget.set_click_through(effective_ghost)
+        # Saat Edit Mode aktif, disable click-through agar jam bisa digeser
+        clock_widget.set_click_through(not clock_widget.edit_mode)
         edit_action.setChecked(clock_widget.edit_mode)
 
     edit_action = menu.addAction("Edit Mode (Drag)")
     edit_action.setCheckable(True)
     edit_action.triggered.connect(toggle_edit)
-
-    def toggle_ghost(checked):
-        clock_widget.ghost_mode = checked
-        if not clock_widget.edit_mode:
-            clock_widget.set_click_through(checked)
-
-    ghost_action = menu.addAction("Ghost Mode (Click-through)")
-    ghost_action.setCheckable(True)
-    ghost_action.setChecked(clock_widget.ghost_mode)
-    ghost_action.triggered.connect(toggle_ghost)
 
     menu.addSeparator()
 
