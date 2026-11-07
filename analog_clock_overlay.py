@@ -3,15 +3,313 @@ import os
 import ctypes
 from ctypes import wintypes
 import winreg
-
-
+import json
 import winsound
-from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTimeEdit, QSpinBox, QPushButton
+from PySide6.QtCore import Qt, QTimer, QTime, QDate, QLocale, QDateTime, QPoint, QRect
+from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTimeEdit, QSpinBox, QPushButton, QLineEdit
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor
+from PySide6.QtGui import QPainter, QColor, QPen, QIcon, QPixmap, QFont, QCursor, QRegion
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtCore import QUrl
+
+def get_notes_path():
+    if hasattr(sys, '_MEIPASS'):
+        base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "notes.json")
+
+def load_notes_data():
+    path = get_notes_path()
+    default_data = {"show_notes": True, "notes": []}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {
+                        "show_notes": data.get("show_notes", True),
+                        "notes": data.get("notes", []) if isinstance(data.get("notes"), list) else []
+                    }
+                elif isinstance(data, list):
+                    return {"show_notes": True, "notes": data}
+        except Exception:
+            return default_data
+    return default_data
+
+def save_notes_data(data):
+    path = get_notes_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+class NotesClickOverlay(QWidget):
+    """
+    Companion window interaktif untuk floating notes.
+    Hanya menerima klik kiri 2x (double click):
+    - Pada [+] -> buka dialog tambah catatan
+    - Pada checkbox [ ] -> hapus catatan (selesai/done)
+    Semua klik lain dan area lain tembus langsung ke background.
+    """
+    def __init__(self, notes_overlay):
+        super().__init__()
+        self.notes_overlay = notes_overlay
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def paintEvent(self, event):
+        # Alpha 1 agar OS Windows bisa mendeteksi klik
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 1))
+
+    def update_geometry(self):
+        if not self.notes_overlay.visible_enabled or not self.notes_overlay.isVisible():
+            self.hide()
+            return
+        self.setGeometry(self.notes_overlay.geometry())
+
+        # Masking presisi:
+        # 1. Tombol [+]
+        # 2. Kotak checklist [ ] (untuk selesaikan/hapus)
+        # 3. Area teks catatan (untuk double-click lihat teks panjang lengkap)
+        mask = QRegion()
+        # Area tombol [+]
+        mask = mask.united(QRegion(QRect(self.width() - 32, 2, 28, 22)))
+
+        if not self.notes_overlay.notes:
+            mask = mask.united(QRegion(QRect(8, 26, self.width() - 16, 20)))
+        else:
+            for i in range(len(self.notes_overlay.notes)):
+                row_y = 25 + i * 22
+                # Checkbox [ ]
+                mask = mask.united(QRegion(QRect(6, row_y + 2, 22, 18)))
+                # Note text
+                mask = mask.united(QRegion(QRect(28, row_y, self.width() - 34, 20)))
+
+        self.setMask(mask)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.position()
+            x = pos.x()
+            y = pos.y()
+
+            # 1. Double click pada [+] (kanan atas) atau jika catatan kosong
+            if (x >= self.width() - 32 and y <= 24) or (not self.notes_overlay.notes and y > 24):
+                self.open_add_dialog()
+                event.accept()
+                return
+
+            # 2. Baris catatan
+            if y > 24:
+                item_idx = int((y - 25) // 22)
+                if 0 <= item_idx < len(self.notes_overlay.notes):
+                    # Checkbox: x <= 28 -> Hapus (selesai)
+                    if x <= 28:
+                        self.notes_overlay.notes.pop(item_idx)
+                        self.notes_overlay.save()
+                        self.notes_overlay.update_geometry()
+                        self.notes_overlay.update()
+                        event.accept()
+                        return
+                    # Teks: x > 28 -> Tampilkan teks panjang lengkap (Detail dialog)
+                    else:
+                        self.open_detail_dialog(item_idx)
+                        event.accept()
+                        return
+
+        super().mouseDoubleClickEvent(event)
+
+    def open_add_dialog(self):
+        dialog = QDialog(self.notes_overlay.clock)
+        dialog.setWindowTitle("Tambah Catatan Prioritas")
+        dialog.setFixedWidth(320)
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Tulis Catatan Prioritas:"))
+        line_edit = QLineEdit()
+        line_edit.setPlaceholderText("Ketik catatan lalu Enter...")
+        layout.addWidget(line_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("Tambah")
+        btn_cancel = QPushButton("Batal")
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        dialog.setLayout(layout)
+
+        def on_ok():
+            text = line_edit.text().strip()
+            if text:
+                self.notes_overlay.notes.append(text)
+                self.notes_overlay.save()
+                self.notes_overlay.update_geometry()
+                self.notes_overlay.update()
+            dialog.accept()
+
+        btn_ok.clicked.connect(on_ok)
+        line_edit.returnPressed.connect(on_ok)
+        btn_cancel.clicked.connect(dialog.reject)
+        line_edit.setFocus()
+        dialog.exec()
+
+    def open_detail_dialog(self, item_idx):
+        if not (0 <= item_idx < len(self.notes_overlay.notes)):
+            return
+        current_text = self.notes_overlay.notes[item_idx]
+
+        dialog = QDialog(self.notes_overlay.clock)
+        dialog.setWindowTitle("Detail Catatan Prioritas")
+        dialog.setFixedWidth(340)
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Isi Lengkap Catatan:"))
+        
+        line_edit = QLineEdit(current_text)
+        layout.addWidget(line_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_save = QPushButton("Simpan")
+        btn_delete = QPushButton("Hapus")
+        btn_close = QPushButton("Tutup")
+        btn_layout.addWidget(btn_save)
+        btn_layout.addWidget(btn_delete)
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+        dialog.setLayout(layout)
+
+        def on_save():
+            new_text = line_edit.text().strip()
+            if new_text:
+                self.notes_overlay.notes[item_idx] = new_text
+                self.notes_overlay.save()
+                self.notes_overlay.update_geometry()
+                self.notes_overlay.update()
+            dialog.accept()
+
+        def on_delete():
+            self.notes_overlay.notes.pop(item_idx)
+            self.notes_overlay.save()
+            self.notes_overlay.update_geometry()
+            self.notes_overlay.update()
+            dialog.accept()
+
+        btn_save.clicked.connect(on_save)
+        line_edit.returnPressed.connect(on_save)
+        btn_delete.clicked.connect(on_delete)
+        btn_close.clicked.connect(dialog.reject)
+        line_edit.setFocus()
+        dialog.exec()
+
+class NotesOverlay(QWidget):
+    """
+    Jendela visual untuk floating notes / priority todo list.
+    100% ghost (WS_EX_TRANSPARENT) sehingga teks dan background tidak menghalangi klik ke desktop.
+    """
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+        data = load_notes_data()
+        self.notes = data["notes"]
+        self.visible_enabled = data["show_notes"]
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlag(Qt.WindowTransparentForInput, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setWindowOpacity(0.85)
+
+        self.click_overlay = NotesClickOverlay(self)
+
+    def save(self):
+        save_notes_data({"show_notes": self.visible_enabled, "notes": self.notes})
+
+    def set_visible_enabled(self, enabled):
+        self.visible_enabled = enabled
+        self.save()
+
+    def update_geometry(self):
+        if not self.visible_enabled:
+            self.hide()
+            self.click_overlay.hide()
+            return
+
+        w = max(160, self.clock.width())
+        content_rows = max(1, len(self.notes))
+        h = 24 + (content_rows * 22) + 8
+
+        x = int(self.clock.x() + (self.clock.width() - w) / 2.0)
+        y = int(self.clock.y() + self.clock.height() + 6)
+
+        self.setGeometry(x, y, w, h)
+        if self.clock.isVisible():
+            self.show()
+            self.click_overlay.update_geometry()
+            self.click_overlay.show()
+        self.update()
+
+    def update_hover(self, mouse_pos):
+        if not self.isVisible():
+            return
+        # Notes hover opacity: tidak seradikal jam (0.45 saat di-hover, 0.85 normal)
+        if self.geometry().contains(mouse_pos):
+            target = 0.45
+        else:
+            target = 0.85
+
+        curr = self.windowOpacity()
+        diff = target - curr
+        if abs(diff) > 0.03:
+            self.setWindowOpacity(curr + (0.05 if diff > 0 else -0.05))
+        else:
+            self.setWindowOpacity(target)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        # Background: dark translucent glass minimalis
+        bg_rect = self.rect().adjusted(1, 1, -1, -1)
+        p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        p.setBrush(QColor(18, 18, 22, 210))
+        p.drawRoundedRect(bg_rect, 7, 7)
+
+        # Header: PRIORITAS & [+] button
+        p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        p.setPen(QColor(220, 220, 225, 200))
+        p.drawText(10, 4, self.width() - 40, 18, Qt.AlignLeft | Qt.AlignVCenter, "PRIORITAS")
+
+        # [+] icon
+        p.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        p.setPen(QColor(255, 255, 255, 220))
+        p.drawText(self.width() - 25, 3, 18, 18, Qt.AlignCenter, "+")
+
+        # Divider line
+        p.setPen(QPen(QColor(255, 255, 255, 20), 1))
+        p.drawLine(8, 23, self.width() - 8, 23)
+
+        # Items
+        if not self.notes:
+            p.setFont(QFont("Segoe UI", 7, QFont.Normal))
+            p.setPen(QColor(180, 180, 190, 140))
+            p.drawText(10, 26, self.width() - 20, 22, Qt.AlignLeft | Qt.AlignVCenter, "Klik 2x [+] untuk tambah")
+        else:
+            for i, note in enumerate(self.notes):
+                row_y = 25 + i * 22
+
+                # Checkbox square [ ]
+                p.setPen(QPen(QColor(200, 200, 210, 180), 1.2))
+                p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(10, row_y + 4, 12, 12, 3, 3)
+
+                # Text note
+                p.setFont(QFont("Segoe UI", 8, QFont.Normal))
+                p.setPen(QColor(240, 240, 245))
+                metrics = p.fontMetrics()
+                available_w = self.width() - 32
+                elided = metrics.elidedText(note, Qt.ElideRight, available_w)
+                p.drawText(28, row_y, available_w, 20, Qt.AlignLeft | Qt.AlignVCenter, elided)
 
 class IconOverlay(QWidget):
     """
@@ -92,6 +390,7 @@ class AnalogClock(QWidget):
         self.timer.timeout.connect(self.on_timer_timeout)
         self.timer.start(16) # 60 FPS for smooth movement
         self.icon_overlay = IconOverlay(self)
+        self.notes_overlay = NotesOverlay(self)
         self.set_click_through(True)
         self.force_topmost()
         
@@ -211,6 +510,8 @@ class AnalogClock(QWidget):
         self.setGeometry(x, y, self.current_width, self.current_height)
         if hasattr(self, 'icon_overlay'):
             self.icon_overlay.update_geometry()
+        if hasattr(self, 'notes_overlay'):
+            self.notes_overlay.update_geometry()
 
     def on_timer_timeout(self):
         # 1. Update drawing
@@ -230,6 +531,9 @@ class AnalogClock(QWidget):
             self.setWindowOpacity(curr + (0.05 if diff > 0 else -0.05))
         else:
             self.setWindowOpacity(target_opacity)
+
+        if hasattr(self, 'notes_overlay'):
+            self.notes_overlay.update_hover(mouse_pos)
 
         # 3. Check for Hourly Chime
         current_time = QTime.currentTime()
@@ -303,10 +607,18 @@ class AnalogClock(QWidget):
             if hasattr(self, 'icon_overlay'):
                 ctypes.windll.user32.SetWindowPos(self.icon_overlay.winId(), HWND_TOPMOST, 0, 0, 0, 0,
                                                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+            if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled and self.notes_overlay.isVisible():
+                ctypes.windll.user32.SetWindowPos(self.notes_overlay.winId(), HWND_TOPMOST, 0, 0, 0, 0,
+                                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+                ctypes.windll.user32.SetWindowPos(self.notes_overlay.click_overlay.winId(), HWND_TOPMOST, 0, 0, 0, 0,
+                                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
         else:
             self.raise_()
             if hasattr(self, 'icon_overlay'):
                 self.icon_overlay.raise_()
+            if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled:
+                self.notes_overlay.raise_()
+                self.notes_overlay.click_overlay.raise_()
 
     def refresh_overlay(self):
         self.set_click_through(not self.edit_mode)
@@ -315,10 +627,16 @@ class AnalogClock(QWidget):
             self.showNormal()
             if hasattr(self, 'icon_overlay'):
                 self.icon_overlay.showNormal()
+            if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled:
+                self.notes_overlay.showNormal()
+                self.notes_overlay.click_overlay.showNormal()
         else:
             self.show()
             if hasattr(self, 'icon_overlay'):
                 self.icon_overlay.show()
+            if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled:
+                self.notes_overlay.show()
+                self.notes_overlay.click_overlay.show()
 
         self.force_topmost()
         self.raise_()
@@ -326,6 +644,10 @@ class AnalogClock(QWidget):
         if hasattr(self, 'icon_overlay'):
             self.icon_overlay.update_geometry()
             self.icon_overlay.raise_()
+        if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled:
+            self.notes_overlay.update_geometry()
+            self.notes_overlay.raise_()
+            self.notes_overlay.click_overlay.raise_()
 
     def set_click_through(self, enabled):
         if enabled:
@@ -339,15 +661,25 @@ class AnalogClock(QWidget):
         if hasattr(self, 'icon_overlay'):
             self.icon_overlay.update_geometry()
             self.icon_overlay.show()
+        if hasattr(self, 'notes_overlay') and self.notes_overlay.visible_enabled:
+            self.notes_overlay.update_geometry()
+            self.notes_overlay.show()
+            self.notes_overlay.click_overlay.show()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         if hasattr(self, 'icon_overlay'):
             self.icon_overlay.hide()
+        if hasattr(self, 'notes_overlay'):
+            self.notes_overlay.hide()
+            self.notes_overlay.click_overlay.hide()
 
     def closeEvent(self, event):
         if hasattr(self, 'icon_overlay'):
             self.icon_overlay.close()
+        if hasattr(self, 'notes_overlay'):
+            self.notes_overlay.close()
+            self.notes_overlay.click_overlay.close()
         super().closeEvent(event)
 
     def paintEvent(self, event):
@@ -484,6 +816,8 @@ class AnalogClock(QWidget):
             self.move(event.globalPosition().toPoint() - self.drag_pos)
             if hasattr(self, 'icon_overlay'):
                 self.icon_overlay.update_geometry()
+            if hasattr(self, 'notes_overlay'):
+                self.notes_overlay.update_geometry()
             event.accept()
 
 def get_resource_path(relative_path):
@@ -546,6 +880,24 @@ def create_tray_icon(clock_widget, app):
     menu = QMenu()
 
     menu.addAction("Refresh Clock").triggered.connect(clock_widget.refresh_overlay)
+    
+    def toggle_notes(checked):
+        clock_widget.notes_overlay.set_visible_enabled(checked)
+        if checked:
+            clock_widget.notes_overlay.update_geometry()
+            clock_widget.notes_overlay.show()
+            clock_widget.notes_overlay.click_overlay.show()
+            clock_widget.notes_overlay.raise_()
+            clock_widget.notes_overlay.click_overlay.raise_()
+        else:
+            clock_widget.notes_overlay.hide()
+            clock_widget.notes_overlay.click_overlay.hide()
+
+    notes_action = menu.addAction("Show Priority Notes")
+    notes_action.setCheckable(True)
+    notes_action.setChecked(clock_widget.notes_overlay.visible_enabled)
+    notes_action.triggered.connect(toggle_notes)
+    
     menu.addSeparator()
 
     def toggle_edit():
